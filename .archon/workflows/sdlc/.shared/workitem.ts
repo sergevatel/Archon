@@ -62,6 +62,12 @@ export interface Claim {
   readonly run_id: string;
   readonly at: string;
   readonly requests: readonly IntakeRequest[];
+  /**
+   * The branch a build round opens its pull request from, recorded before the round
+   * starts, so own-PR enrollment knows that pull request is the build queue's before
+   * the round records it. Absent on every other claim.
+   */
+  readonly branch?: string;
 }
 
 export interface Promotion {

@@ -4,10 +4,11 @@
  * A maintainer whose maintainer-list entry sets `merge_queue: "own-prs"` gets each of
  * their open, non-draft pull requests a work item of its own, so a pull request they
  * opened by hand merges under the policy like one the build queue delivered. A pull
- * request a work item already names, through a build round or an earlier enrollment,
- * is left alone. A build round records its pull request when the round ends, so one
- * listed while the round still runs can enroll; that short window is an accepted gap,
- * and enrollment after the round finds the pull request recorded.
+ * request a work item already names is the build queue's or an earlier enrollment's,
+ * and is left alone: one a build round recorded, one triage routed the item to
+ * continue, or one opened from the branch a running build round's claim records. The
+ * build queue's pull requests are authored by a maintainer too, and the branch is what
+ * names one while its round still runs, before the round records it.
  */
 
 import { forgeSource, record, samePr, type QualifiedPr } from './forge.ts';
@@ -17,7 +18,7 @@ import { stateDocuments, stateGet, statePut } from './state.ts';
 import { newWorkItem, read, type WorkItem, workItemName } from './workitem.ts';
 
 /** The fields `gh pr list --json` selects, and the type each row carries for them. */
-const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean' } as const;
+const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean', headRefName: 'string' } as const;
 type OpenPr = {
   readonly [Field in keyof typeof OPEN_PR_FIELDS]: { number: number; string: string; boolean: boolean }[(typeof OPEN_PR_FIELDS)[Field]];
 };
@@ -40,26 +41,36 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
 }
 
 /**
- * The pull requests some work item already names: its subject, its own-PR URL, and the
- * PR every one of its build rounds recorded. Not only the latest round's, as `itemPr`
- * picks for the merge path: a PR an earlier round abandoned is build history, not a
- * maintainer's own PR. A malformed item or URL is noted and skipped, as the pickup
- * skips it.
+ * The pull requests some work item already names: its subject, its own-PR URL, the PR
+ * triage routed it to continue, and the PR every one of its build rounds recorded. Not
+ * only the latest round's, as `itemPr` picks for the merge path: a PR an earlier round
+ * abandoned is build history, not a maintainer's own PR. `branches` are the branches
+ * running build rounds open their pull requests from. A malformed item or URL is noted
+ * and skipped, as the pickup skips it.
  */
-function namedPrs(): QualifiedPr[] {
+function namedPrs(): { prs: QualifiedPr[]; branches: Set<string> } {
   const named: QualifiedPr[] = [];
+  const branches = new Set<string>();
   for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
-    named.push(doc.subject);
-    const urls = [...(doc.facts.build?.rounds ?? []).map(round => round.pr_url), doc.facts.own_pr?.url ?? ''];
-    for (const url of urls.filter(recorded => recorded !== '')) {
-      try {
-        named.push(prFromUrl(url));
-      } catch (error) {
-        note(`own-PR enrollment skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    named.push(doc.subject, ...recordedPrs(name, doc));
+    const continued = doc.facts.triage?.pull_request;
+    if (continued != null) named.push({ repo: doc.subject.repo, number: continued });
+    if (doc.claim?.branch !== undefined) branches.add(doc.claim.branch);
   }
-  return named;
+  return { prs: named, branches };
+}
+
+/** The PRs the item's build rounds and own-PR enrollment recorded by URL. */
+function recordedPrs(name: string, doc: WorkItem): QualifiedPr[] {
+  const urls = [...(doc.facts.build?.rounds ?? []).map(round => round.pr_url), doc.facts.own_pr?.url ?? ''];
+  return urls.filter(recorded => recorded !== '').flatMap(url => {
+    try {
+      return [prFromUrl(url)];
+    } catch (error) {
+      note(`own-PR enrollment skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  });
 }
 
 /** An enrolled own pull request that no build round has taken over since. */
@@ -80,7 +91,7 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
   for (const author of authors) {
     for (const pr of openPrsBy(repo, author).filter(listed => !listed.isDraft)) {
       const subject = prFromUrl(pr.url);
-      if (named.some(claimed => samePr(claimed, subject))) continue;
+      if (named.branches.has(pr.headRefName) || named.prs.some(claimed => samePr(claimed, subject))) continue;
       const name = workItemName(subject.number);
       const stored = stateGet(name);
       if (stored.value !== null) continue;

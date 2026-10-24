@@ -8,7 +8,6 @@
  */
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
-import { note } from './io.ts';
 import { PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
@@ -18,7 +17,6 @@ import {
   type HistoryEntry,
   newest,
   type Pickup,
-  parseWorkItem,
   read,
   releaseIfTerminal,
   type Stage,
@@ -27,8 +25,15 @@ import {
   workItemName,
 } from './workitem.ts';
 
-/** What a build choice does when a person picks it; archon-build-queue.yaml declares the same enum. */
-export const BUILD_EFFECTS = ['continue', 'park'] as const;
+/**
+ * What a build choice does when a person picks it; archon-build-queue.yaml declares the
+ * same enum. `continue` launches the next round from the brief. `ready` hands the pull
+ * request to the merge queue as it stands, such as after a maintainer finished it by
+ * hand. `wait` stops work until every issue or pull request the choice names in
+ * `blockers` closes or merges, and the revisit then sends the item to re-triage. `park`
+ * stops work until a re-triage.
+ */
+export const BUILD_EFFECTS = ['continue', 'ready', 'wait', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
 export type BuildAttention = Attention<BuildEffect>;
 
@@ -64,16 +69,20 @@ export interface BuildRound {
 }
 
 /**
- * `next`: the item waits for its next launch, from `brief`. `asking`: a run is paused
- * on the item's attention item. `ready`: its pull request is reviewed and ready.
- * `parked`: the queue stopped working it, until a re-triage.
+ * Who owns the item, as the build queue last recorded it. `next`: the build queue, for
+ * its next launch from `brief`. `asking`: the build queue, paused on the item's
+ * attention item. `ready`: handed to the merge queue, which owns its pull request from
+ * here. `waiting`: no queue, until every one of `blockers` closes or merges. `parked`:
+ * no queue, until a re-triage.
  */
-export type BuildStatus = 'next' | 'asking' | 'ready' | 'parked';
+export type BuildStatus = 'next' | 'asking' | 'ready' | 'waiting' | 'parked';
 
 export interface BuildRecord {
   readonly status: BuildStatus;
   /** What the next launch starts from; empty unless the status is `next`. */
   readonly brief: string;
+  /** The issues or pull requests, in the item's repository, a `waiting` item waits on; absent otherwise. */
+  readonly blockers?: readonly number[];
   readonly rounds: readonly BuildRound[];
   readonly decisions: readonly DecisionEntry[];
   /** When the queue last decided the item. */
@@ -120,35 +129,58 @@ export function claimNamed(number: number, at: string, runId: string): WorkItem 
   throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
 }
 
+/**
+ * Refuse a `wait` choice that names no blocker before anyone is asked: an answer to it
+ * would stop the item with nothing that could wake it.
+ */
+export function checkWaits(attention: BuildAttention): void {
+  const blind = attention.choices.find(choice => choice.effect === 'wait' && (choice.blockers ?? []).length === 0);
+  if (blind !== undefined) throw new Error(`the wait choice "${blind.id}" names no blocker to wait on`);
+}
+
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
 export interface BlockedItem {
   readonly number: number;
   readonly summary: string;
 }
 
+/** A waiting item and the issues or pull requests it waits on. */
+export interface WaitingItem {
+  readonly number: number;
+  readonly blockers: readonly number[];
+}
+
 // A scheduled queue would otherwise judge the same blocked items on every run.
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
 
-/** The unclaimed blocked items the queue has not revisited in the last few hours. */
-export function dueBlocked(at: string): BlockedItem[] {
+/**
+ * What the revisit reads. `blocked`: the unclaimed blocked items the queue has not
+ * revisited in the last few hours. `waiting`: the unclaimed waiting items not yet sent
+ * to re-triage since they began waiting; checking their blockers costs no agent, so
+ * they are read every run.
+ */
+export function revisitDue(at: string): { blocked: BlockedItem[]; waiting: WaitingItem[] } {
   const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
-  const items: BlockedItem[] = [];
-  for (const stored of stateDocuments('work/')) {
-    if (stored.value === null) continue;
-    let doc: WorkItem;
-    try {
-      doc = parseWorkItem(stored.value);
-    } catch (error) {
-      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
+  const blocked: BlockedItem[] = [];
+  const waiting: WaitingItem[] = [];
+  for (const { doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
+    if (doc.claim !== null) continue;
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
-    if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
-    const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
-    items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+    if (doc.stage === 'blocked' && last < due) {
+      const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
+      blocked.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+    } else if (doc.stage !== 'blocked' && waitUnsent(doc, last)) {
+      waiting.push({ number: doc.subject.number, blockers: doc.facts.build?.blockers ?? [] });
+    }
   }
-  return items;
+  return { blocked, waiting };
+}
+
+/** A waiting item that neither a revisit nor a re-triage has acted on since it began waiting. */
+function waitUnsent(doc: WorkItem, lastRevisit: string): boolean {
+  const build = doc.facts.build;
+  return build?.status === 'waiting' && lastRevisit < build.at && (doc.facts.triage?.at ?? '') < build.at;
 }
 
 /** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
@@ -234,6 +266,8 @@ export interface BuildChange {
   readonly entry: DecisionEntry;
   readonly status: BuildStatus;
   readonly brief: string;
+  /** What a `waiting` status waits on; ignored for any other status. */
+  readonly blockers?: readonly number[];
   /** Clear the claim in the same write: nothing is left for this run to do. */
   readonly release: boolean;
 }
@@ -246,6 +280,7 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
   const build: BuildRecord = {
     status: change.status,
     brief: change.status === 'next' ? change.brief : '',
+    ...(change.status === 'waiting' ? { blockers: change.blockers ?? [] } : {}),
     rounds: [...(prior?.rounds ?? []), ...round].slice(-KEPT_ROUNDS),
     decisions: [...(prior?.decisions ?? []), entry].slice(-KEPT_DECISIONS),
     at: change.at,

@@ -348,7 +348,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (forgePr.ownPrsFail) return out(1, '', 'HTTP 502');
     // Each row carries only the fields \`--json\` selected, as gh reports them.
     const selected = String(argv[argv.indexOf('--json') + 1]).split(',');
-    const rows = (forgePr.ownPrs ?? []).map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
+    // A row names a branch of its own unless the test sets one.
+    const rows = (forgePr.ownPrs ?? []).map(listed => ({ headRefName: 'hand-' + String(listed.number), ...listed }))
+      .map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
     return out(0, JSON.stringify(rows));
   }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
@@ -532,6 +534,24 @@ describe('the merge queue scripts', () => {
     const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
     expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
     expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
+  test("a running round's pull request is the build queue's before the round records it, and a hand-made one still enrolls", () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    // The round runs: its claim names the branch it opened PR 50 from, and no round records 50 yet.
+    seed(at, item({ ...BUILT, status: 'next' }, undefined, { claim: { run_id: 'build-run', at: AT, requests: [], branch: 'build/7-fix-buildrun' } }));
+    // Triage routed issue 8 to continue PR 52.
+    seed(at, item({ ...BUILT, status: 'next' }, undefined, { subject: { ...SUBJECT, number: 8 }, facts: { triage: { ...TRIAGE, pull_request: 52 } } }));
+    const ownPrs = [
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-buildrun' },
+      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: false, headRefName: 'my-fix' },
+      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'old-work' },
+    ];
+    // The fake engine reports no status for the build run, so the merge pickup notes its claim held.
+    expect(run(at, 'facts', {}, { pr: { ownPrs } }).code).toBe(0);
+    expect(stored(at, 50).value).toBeNull();
+    expect(stored(at, 51).value?.facts.own_pr?.url).toBe(ownPrs[1]!.url);
+    expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
   test('a pull request an earlier build round recorded is not enrolled, though a later round moved on', () => {

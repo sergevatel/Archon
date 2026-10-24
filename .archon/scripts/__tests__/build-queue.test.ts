@@ -20,6 +20,7 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { BUILD_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
+import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
@@ -31,7 +32,7 @@ import {
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import {
-  type GhApiIssue, type GhPr, type ScriptOptions, type ScriptRun,
+  type GhApiIssue, type GhIssue, type GhPr, type ScriptOptions, type ScriptRun,
   forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
@@ -278,6 +279,7 @@ function run(
   inputs: Record<string, string>,
   options: {
     issue?: GhApiIssue;
+    issues?: readonly GhIssue[];
     pr?: GhPr;
     writeLost?: boolean;
     source?: ScriptOptions['source'];
@@ -292,6 +294,7 @@ function run(
     gh: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
       issueLabels: ['archon-ready'],
+      issues: options.issues,
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
       writeLost: options.writeLost,
@@ -581,6 +584,8 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: 'build/7-an-issue-run-1' });
     seed(at, triaged({ claim: null }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
+    // The claim names the branch before any round opens a pull request from it.
+    expect(stored(at).value?.claim).toMatchObject({ run_id: 'run-1', branch: 'build/7-an-issue-run-1' });
   }, 60_000);
 
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
@@ -636,6 +641,7 @@ describe('the build queue scripts', () => {
     const sent = run(at, 'retriage', {
       ...inputs,
       INPUTS_BLOCKED: JSON.stringify(blocked),
+      INPUTS_WOKEN: '[]',
       INPUTS_RETRIAGE: JSON.stringify([{ number: 8, reason: 'its dependency merged' }]),
     }, { issue: { number: 8 } });
     expect(ok(sent)).toMatchObject({ retriaged: [8] });
@@ -652,6 +658,7 @@ describe('the build queue scripts', () => {
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {
         INPUTS_BLOCKED: JSON.stringify(blocked),
+        INPUTS_WOKEN: '[]',
         INPUTS_RETRIAGE: JSON.stringify(judged),
         INPUTS_RETRIAGE_AS: 'maintainer',
         ARCHON_CALL_LOG: calls,
@@ -882,6 +889,66 @@ describe('the build queue scripts', () => {
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
+  }, 60_000);
+
+  test('a ready answer hands the pull request to the merge queue, and a park leaves it with no queue', () => {
+    const ready = { id: 'operator-finishes', label: 'I finish it by hand', does: 'hands the PR to the merge queue', effect: 'ready' as const, ruling: '', blockers: [] };
+    const asked = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, ready] }, brief: 'b', by: 'stop' });
+    for (const [choice, owned] of [['operator-finishes', true], ['park', false]] as const) {
+      const at = install();
+      seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '', rounds: [round('r1', AT)] })));
+      expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: choice, INPUTS_TEXT: '' })).decision).toBe(
+        owned ? 'ready' : 'park'
+      );
+      const doc = stored(at).value as WorkItem;
+      expect(doc.claim).toBeNull();
+      expect(buildWaits(doc)).toBe(false);
+      expect(mergeWaits(doc)).toBe(owned);
+    }
+  }, 60_000);
+
+  test('a wait answer records its blockers and leaves the item to the revisit, which wakes it once they all settle', () => {
+    const wait = { id: 'wait-for-fix', label: 'Wait for #5 and #6', does: 'waits for both', effect: 'wait' as const, ruling: '', blockers: [5, 6] };
+    const attention = { ...ATTENTION, choices: [...ATTENTION.choices, wait] };
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const asked = JSON.stringify({ attention, brief: 'b', by: 'stop' });
+    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: 'wait-for-fix', INPUTS_TEXT: '' })).summary).toContain(
+      'it waits until #5, #6 close or merge'
+    );
+    const waiting = stored(at).value as WorkItem;
+    expect(waiting).toMatchObject({ claim: null, facts: { build: { status: 'waiting', blockers: [5, 6] } } });
+    expect(buildWaits(waiting)).toBe(false);
+    expect(mergeWaits(waiting)).toBe(false);
+
+    const revisit = { INPUTS_RETRIAGE_AS: 'maintainer' };
+    // #5 is a closed issue; #6 is a pull request, read for whether it merged.
+    const issues: GhIssue[] = [{ number: 5, title: 'fix', body: '', state: 'CLOSED' }, { number: 6, title: 'pr', body: '', state: 'OPEN', pull: true }];
+    const pending = ok(run(at, 'blocked', revisit, { issues, pr: { state: 'OPEN' } }));
+    expect(pending).toMatchObject({ blocked: [], woken: [] });
+    // A run that builds another named item checks waits too.
+    const settled = ok(run(at, 'blocked', { ...revisit, INPUTS_NUMBER: '9' }, { issues, pr: { state: 'MERGED' } }));
+    expect(settled.woken).toEqual([{ number: 7, reason: 'its blockers settled: #5 closed, #6 merged' }]);
+
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const sent = run(at, 'retriage', { ...revisit, INPUTS_BLOCKED: '[]', INPUTS_WOKEN: JSON.stringify(settled.woken), INPUTS_RETRIAGE: '[]', ARCHON_CALL_LOG: calls });
+    expect(ok(sent)).toMatchObject({ retriaged: [7] });
+    expect(sent.gh).toContain(`issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'label=archon-triage', 'label_actor=maintainer']));
+    // One wake per wait: the next run does not send it again while intake re-triages it.
+    expect(ok(run(at, 'blocked', { ...revisit, WORKFLOW_ID: 'run-2' }, { issues, pr: { state: 'MERGED' } })).woken).toEqual([]);
+  }, 60_000);
+
+  test('a wait choice that names no blocker is refused before anyone is asked', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at);
+    const blind = { id: 'wait-for-fix', label: 'Wait', does: 'waits', effect: 'wait' as const, ruling: '', blockers: [] };
+    const applied = run(at, 'apply', applyInputs({ ...ASK, attention: { ...ATTENTION, choices: [...ATTENTION.choices, blind] } }));
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('the wait choice "wait-for-fix" names no blocker');
+    expect(stored(at)).toEqual(before);
   }, 60_000);
 
   test('an answer that is not a declared choice, or a section that does not read back, records nothing', () => {

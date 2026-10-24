@@ -522,7 +522,10 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `archon-triage` to each and starts `archon-intake` detached with that label event,
   recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
   that login is on the maintainer list, and its verdict decides whether the item now
-  waits for the build queue. Every listed item records the revisit.
+  waits for the build queue. Every listed item records the revisit. Every run with
+  `retriage_as` set, named or not, also reads the blockers of each waiting item (an
+  answered `wait`, below) from the forge: once each one is closed or merged, the item
+  gets the same re-triage with no agent, once per wait.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a
@@ -580,13 +583,20 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   scope" section, reads it back, and records the answer: a `continue` choice starts
   the item's next round at once, a detached `archon-build-queue --input number=<n>`
   run on the run config (`--config-from-run`) and the `retriage_as` and
-  `round_limit` the answered run started with, and a
-  `park` choice stops working the item until a re-triage. If that launch fails, the
-  item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
+  `round_limit` the answered run started with. A `ready` choice hands the pull
+  request to the merge queue as it stands, as after a maintainer finished it by hand;
+  the merge queue's gate still checks it. A `wait` choice names its `blockers`, the
+  issues or pull requests it waits on, and stops working the item until they close or
+  merge; `apply` refuses a wait choice that names none. A `park` choice stops working
+  the item until a re-triage. If a continue's launch fails, the item waits for the next
+  queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
-- **Record.** The work item's `facts.build` holds the item's status (`next`,
-  `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
-  rounds and its last twenty decisions with any maintainer's answer.
+- **Record.** The work item's `facts.build` holds the item's status, which says who
+  owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
+  (`waiting` on its `blockers`, or `parked`). It also holds the brief its next round
+  starts from, its last ten rounds and its last twenty decisions with any maintainer's
+  answer. While a round runs, the claim records the branch the round opens its pull
+  request from.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
 item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
@@ -637,10 +647,9 @@ then the project's file, whose lines win where the two conflict.
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
-  a build round recorded is named by its build item and never enrolls. A build round
-  records its pull request once the round ends, so one listed while the round is still
-  running can enroll; that short window is an accepted gap, and enrollment after the
-  round finds the pull request recorded. An own-PR
+  the build queue owns never enrolls, although a maintainer's login authored it: one a
+  build round recorded, one triage routed an item to continue, or one opened from the
+  branch a running round's claim records. An own-PR
   item has no build record of its own, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and

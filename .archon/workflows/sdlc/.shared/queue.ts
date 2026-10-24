@@ -24,6 +24,11 @@ export interface Choice<Effect extends string> {
    * no section.
    */
   readonly ruling: string;
+  /**
+   * The issue or pull request numbers, in the item's repository, a waiting effect waits
+   * on. Only a queue that declares such an effect asks for it.
+   */
+  readonly blockers?: readonly number[];
 }
 
 export const CONFIDENCES = ['low', 'medium', 'high'] as const;

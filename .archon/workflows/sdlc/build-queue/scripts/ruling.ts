@@ -5,16 +5,19 @@
  * never from the answer's text. The choice's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
- * work item, which says what happens next, and the claim is released. A `continue` then
- * starts the item's next build-queue run at once, on the run config and input selections
- * this run started with; if that launch fails, the item waits for the next queue run as before.
+ * work item as the item's next owner, and the claim is released: `continue` keeps it in
+ * the build queue, `ready` hands its pull request to the merge queue, `wait` leaves it to
+ * the revisit until its blockers close or merge, and `park` stops all work until a
+ * re-triage. A `continue` then starts the item's next build-queue run at once, on the
+ * run config and input selections this run started with; if that launch fails, the item
+ * waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE
  * and INPUTS_TEXT, the attention answer; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
  * the workflow's inputs.
  */
 
-import { type AskedBy, type BuildAttention, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
@@ -26,6 +29,15 @@ interface Asked {
   readonly attention: BuildAttention;
   readonly brief: string;
   readonly by: AskedBy;
+}
+
+const STATUS = { continue: 'next', ready: 'ready', wait: 'waiting', park: 'parked' } as const satisfies Record<
+  BuildEffect,
+  BuildStatus
+>;
+
+function blockerList(blockers: readonly number[]): string {
+  return blockers.map(number => `#${String(number)}`).join(', ');
 }
 
 const ABOUT: Record<AskedBy, string> = {
@@ -58,6 +70,8 @@ function main(): void {
     choice.effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
+  // Apply refused a wait choice with no blocker before anyone was asked.
+  const blockers = choice.blockers ?? [];
   updateClaimed(item, runId, doc =>
     withBuild(doc, {
       at,
@@ -66,20 +80,27 @@ function main(): void {
       entry: {
         at,
         run_id: runId,
-        decision: choice.effect === 'continue' ? 'answered: continue' : 'answered: park',
+        decision: `answered: ${choice.effect}`,
         reason: choice.label,
         links: asked.attention.links,
         answer: { choice: choice.id, text: words, at },
       },
-      status: choice.effect === 'continue' ? 'next' : 'parked',
+      status: STATUS[choice.effect],
       brief,
+      blockers,
       release: true,
     })
   );
+  const next = {
+    continue: () => launchNextRound(item, runId, selections),
+    ready: () => 'its pull request waits for the merge queue',
+    wait: () => `it waits until ${blockerList(blockers)} close or merge, then goes back to intake`,
+    park: () => 'the queue stops working it until a re-triage',
+  } satisfies Record<BuildEffect, () => string>;
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? launchNextRound(item, runId, selections) : 'the queue stops working it until a re-triage'}.`,
+    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next[choice.effect]()}.`,
   });
 }
 

@@ -18,7 +18,7 @@
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { withBuild } from '../../.shared/build.ts';
+import { checkWaits, withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
@@ -69,6 +69,7 @@ type Decision =
 function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
+  checkWaits(attention);
   return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
 }
 

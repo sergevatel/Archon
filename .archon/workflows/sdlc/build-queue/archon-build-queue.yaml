@@ -36,7 +36,8 @@ inputs:
       The maintainer login a blocked item's re-triage is requested as. Set, a run that
       names no item also revisits the blocked items: one agent judges which no longer
       look blocked, and those get archon-triage and an intake run with that label
-      event. Empty revisits nothing.
+      event. Set, every run also sends a waiting item whose blockers all closed or
+      merged the same way, with no agent. Empty revisits nothing.
   round_limit:
     default: "3"
     description: >-
@@ -148,9 +149,11 @@ nodes:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
                   label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  effect: { type: string, enum: [continue, park] }
+                  effect: { type: string, enum: [continue, ready, wait, park] }
                   ruling: { type: string }
-                required: [id, label, does, effect, ruling]
+                  # The issue or pull request numbers a wait choice waits on; empty otherwise.
+                  blockers: { type: array, items: { type: integer, minimum: 1 } }
+                required: [id, label, does, effect, ruling, blockers]
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
@@ -290,7 +293,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [continue, park] }
+        decision: { type: string, enum: [continue, ready, wait, park] }
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]
@@ -312,7 +315,16 @@ nodes:
               summary: { type: string }
             required: [number, summary]
         blocked_count: { type: integer }
-      required: [blocked, blocked_count]
+        # Waiting items whose blockers all closed or merged; they skip the agent.
+        woken:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer, minimum: 1 }
+              reason: { type: string }
+            required: [number, reason]
+      required: [blocked, blocked_count, woken]
 
   - id: revisit
     command: revisit
@@ -340,9 +352,11 @@ nodes:
     script: retriage
     runtime: bun
     depends_on: [blocked, revisit]
+    trigger_rule: none_failed_min_one_success
     with:
       blocked: { from: "$blocked.output.blocked" }
-      retriage: { from: "$revisit.output.retriage" }
+      woken: { from: "$blocked.output.woken" }
+      retriage: { from: "$revisit.output.retriage", if_skipped: [] }
     output_format:
       type: object
       properties:

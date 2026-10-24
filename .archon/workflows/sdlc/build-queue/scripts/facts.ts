@@ -8,7 +8,9 @@
  *
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the candidate the round continues;
- * otherwise the round opens one from a new branch named after the issue.
+ * otherwise the round opens one from a new branch named after the issue. That branch is
+ * recorded on the claim before any round starts, so the pull request it opens is the
+ * build queue's from the moment it exists, not a maintainer's own.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -26,7 +28,7 @@ import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNext, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -125,15 +127,13 @@ function main(): void {
   writeIssue(issue.title, issue.url, issue.body);
   const closed = issue.state === 'closed';
   const rounds = doc.facts.build?.rounds ?? [];
-  emitItem(
-    closed ? 'closed' : 'route',
-    doc.subject,
-    issue.url,
-    doc,
-    rounds,
-    countedRounds(doc) + 1 >= limit,
-    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId)
-  );
+  const itemPr = closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId);
+  if (itemPr.branch !== '') {
+    updateClaimed(doc.subject, runId, current =>
+      current.claim === null ? current : { ...current, claim: { ...current.claim, branch: itemPr.branch } }
+    );
+  }
+  emitItem(closed ? 'closed' : 'route', doc.subject, issue.url, doc, rounds, countedRounds(doc) + 1 >= limit, itemPr);
 }
 
 try {
