@@ -129,7 +129,7 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
     'build-queue/archon-build-queue.yaml',
     'blocked'
   );
-  expect(output).toEqual({ blocked: [{ number: 8, summary: '' }], blocked_count: 1 });
+  expect(output).toEqual({ blocked: [{ number: 8, summary: '' }], blocked_count: 1, woken: [] });
   const schema = outputFormat('build-queue/archon-build-queue.yaml', 'blocked');
   for (const item of [
     {},
@@ -139,9 +139,9 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
     { number: 0, summary: '' },
     { number: 8, summary: null },
   ]) {
-    expect(validateStructuredOutput({ blocked: [item], blocked_count: 1 }, schema).valid).toBe(
-      false
-    );
+    expect(
+      validateStructuredOutput({ blocked: [item], blocked_count: 1, woken: [] }, schema).valid
+    ).toBe(false);
   }
 });
 
