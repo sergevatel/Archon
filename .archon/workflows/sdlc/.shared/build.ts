@@ -9,7 +9,7 @@
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import { PR_CREATE_UNRESOLVED } from './pr.ts';
-import type { Attention, DecisionEntry } from './queue.ts';
+import type { Attention, Choice, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
   claimable,
@@ -35,7 +35,9 @@ import {
  */
 export const BUILD_EFFECTS = ['continue', 'ready', 'wait', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
-export type BuildAttention = Attention<BuildEffect>;
+/** A build choice; a `wait` choice also names the issue or pull request numbers, in the item's repository, it waits on. */
+export type BuildChoice = Choice<BuildEffect> & { readonly blockers?: readonly number[] };
+export type BuildAttention = Omit<Attention<BuildEffect>, 'choices'> & { readonly choices: readonly BuildChoice[] };
 
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
 export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;

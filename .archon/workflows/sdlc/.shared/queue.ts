@@ -24,11 +24,6 @@ export interface Choice<Effect extends string> {
    * no section.
    */
   readonly ruling: string;
-  /**
-   * The issue or pull request numbers, in the item's repository, a waiting effect waits
-   * on. Only a queue that declares such an effect asks for it.
-   */
-  readonly blockers?: readonly number[];
 }
 
 export const CONFIDENCES = ['low', 'medium', 'high'] as const;
@@ -109,10 +104,10 @@ export function withOther<Effect extends string>(
 }
 
 /** The declared choice an answer named; an id that was never offered refuses. */
-export function chosen<Effect extends string>(
-  attention: Attention<Effect>,
+export function chosen<C extends { readonly id: string }>(
+  attention: { readonly choices: readonly C[] },
   id: string
-): Choice<Effect> {
+): C {
   const choice = attention.choices.find(entry => entry.id === id);
   if (choice === undefined) throw new Error(`the answer "${id}" is not one of the choices`);
   return choice;
