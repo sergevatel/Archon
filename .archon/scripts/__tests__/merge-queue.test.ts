@@ -540,18 +540,14 @@ describe('the merge queue scripts', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     // The round runs: its claim names the branch it opened PR 50 from, and no round records 50 yet.
     seed(at, item({ ...BUILT, status: 'next' }, undefined, { claim: { run_id: 'build-run', at: AT, requests: [], branch: 'build/7-fix-buildrun' } }));
-    // Triage routed issue 8 to continue PR 52.
-    seed(at, item({ ...BUILT, status: 'next' }, undefined, { subject: { ...SUBJECT, number: 8 }, facts: { triage: { ...TRIAGE, pull_request: 52 } } }));
     const ownPrs = [
       { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-buildrun' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: false, headRefName: 'my-fix' },
-      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'old-work' },
     ];
     // The fake engine reports no status for the build run, so the merge pickup notes its claim held.
     expect(run(at, 'facts', {}, { pr: { ownPrs } }).code).toBe(0);
     expect(stored(at, 50).value).toBeNull();
     expect(stored(at, 51).value?.facts.own_pr?.url).toBe(ownPrs[1]!.url);
-    expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
   test('a pull request an earlier build round recorded is not enrolled, though a later round moved on', () => {

@@ -131,15 +131,6 @@ export function claimNamed(number: number, at: string, runId: string): WorkItem 
   throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
 }
 
-/**
- * Refuse a `wait` choice that names no blocker before anyone is asked: an answer to it
- * would stop the item with nothing that could wake it.
- */
-export function checkWaits(attention: BuildAttention): void {
-  const blind = attention.choices.find(choice => choice.effect === 'wait' && (choice.blockers ?? []).length === 0);
-  if (blind !== undefined) throw new Error(`the wait choice "${blind.id}" names no blocker to wait on`);
-}
-
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
 export interface BlockedItem {
   readonly number: number;

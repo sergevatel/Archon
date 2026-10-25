@@ -5,8 +5,8 @@
  * their open, non-draft pull requests a work item of its own, so a pull request they
  * opened by hand merges under the policy like one the build queue delivered. A pull
  * request a work item already names is the build queue's or an earlier enrollment's,
- * and is left alone: one a build round recorded, one triage routed the item to
- * continue, or one opened from the branch a running build round's claim records. The
+ * and is left alone: one a build round recorded, or one opened from the branch a
+ * running build round's claim records. The
  * build queue's pull requests are authored by a maintainer too, and the branch is what
  * names one while its round still runs, before the round records it.
  */
@@ -41,9 +41,8 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
 }
 
 /**
- * The pull requests some work item already names: its subject, its own-PR URL, the PR
- * triage routed it to continue, and the PR every one of its build rounds recorded. Not
- * only the latest round's, as `itemPr` picks for the merge path: a PR an earlier round
+ * The pull requests some work item already names: its subject, its own-PR URL, and the
+ * PR every one of its build rounds recorded. Not only the latest round's, as `itemPr` picks for the merge path: a PR an earlier round
  * abandoned is build history, not a maintainer's own PR. `branches` are the branches
  * running build rounds open their pull requests from. A malformed item or URL is noted
  * and skipped, as the pickup skips it.
@@ -53,8 +52,6 @@ function namedPrs(): { prs: QualifiedPr[]; branches: Set<string> } {
   const branches = new Set<string>();
   for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
     named.push(doc.subject, ...recordedPrs(name, doc));
-    const continued = doc.facts.triage?.pull_request;
-    if (continued != null) named.push({ repo: doc.subject.repo, number: continued });
     if (doc.claim?.branch !== undefined) branches.add(doc.claim.branch);
   }
   return { prs: named, branches };

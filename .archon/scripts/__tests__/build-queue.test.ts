@@ -940,17 +940,6 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'blocked', { ...revisit, WORKFLOW_ID: 'run-2' }, { issues, pr: { state: 'MERGED' } })).woken).toEqual([]);
   }, 60_000);
 
-  test('a wait choice that names no blocker is refused before anyone is asked', () => {
-    const at = install();
-    seed(at, triaged(CLAIMED));
-    const before = stored(at);
-    const blind = { id: 'wait-for-fix', label: 'Wait', does: 'waits', effect: 'wait' as const, ruling: '', blockers: [] };
-    const applied = run(at, 'apply', applyInputs({ ...ASK, attention: { ...ATTENTION, choices: [...ATTENTION.choices, blind] } }));
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('the wait choice "wait-for-fix" names no blocker');
-    expect(stored(at)).toEqual(before);
-  }, 60_000);
-
   test('an answer that is not a declared choice, or a section that does not read back, records nothing', () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));

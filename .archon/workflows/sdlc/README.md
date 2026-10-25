@@ -523,9 +523,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
   that login is on the maintainer list, and its verdict decides whether the item now
   waits for the build queue. Every listed item records the revisit. Every run with
-  `retriage_as` set, named or not, also reads the blockers of each waiting item (an
-  answered `wait`, below) from the forge: once each one is closed or merged, the item
-  gets the same re-triage with no agent, once per wait.
+  `retriage_as` set, named or not, also re-triages a waiting item (an answered
+  `wait`, below) once all its blockers are closed or merged, with no agent.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a
@@ -587,7 +586,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   request to the merge queue as it stands, as after a maintainer finished it by hand;
   the merge queue's gate still checks it. A `wait` choice names its `blockers`, the
   issues or pull requests it waits on, and stops working the item until they close or
-  merge; `apply` refuses a wait choice that names none. A `park` choice stops working
+  merge. A `park` choice stops working
   the item until a re-triage. If a continue's launch fails, the item waits for the next
   queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
@@ -648,8 +647,7 @@ then the project's file, whose lines win where the two conflict.
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
   the build queue owns never enrolls, although a maintainer's login authored it: one a
-  build round recorded, one triage routed an item to continue, or one opened from the
-  branch a running round's claim records. An own-PR
+  build round recorded, or one opened from the branch a running round's claim records. An own-PR
   item has no build record of its own, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and

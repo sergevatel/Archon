@@ -36,10 +36,6 @@ const STATUS = { continue: 'next', ready: 'ready', wait: 'waiting', park: 'parke
   BuildStatus
 >;
 
-function blockerList(blockers: readonly number[]): string {
-  return blockers.map(number => `#${String(number)}`).join(', ');
-}
-
 const ABOUT: Record<AskedBy, string> = {
   route: "the build queue's routing question",
   stop: "the build queue's question on a stopped run",
@@ -70,7 +66,6 @@ function main(): void {
     choice.effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
-  // Apply refused a wait choice with no blocker before anyone was asked.
   const blockers = choice.blockers ?? [];
   updateClaimed(item, runId, doc =>
     withBuild(doc, {
@@ -91,17 +86,15 @@ function main(): void {
       release: true,
     })
   );
-  const next = {
-    continue: () => launchNextRound(item, runId, selections),
-    ready: () => 'its pull request waits for the merge queue',
-    wait: () => `it waits until ${blockerList(blockers)} close or merge, then goes back to intake`,
-    park: () => 'the queue stops working it until a re-triage',
-  } satisfies Record<BuildEffect, () => string>;
-  emit({
-    decision: choice.effect,
-    section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next[choice.effect]()}.`,
-  });
+  const next =
+    choice.effect === 'continue'
+      ? launchNextRound(item, runId, selections)
+      : choice.effect === 'ready'
+        ? 'its pull request waits for the merge queue'
+        : choice.effect === 'wait'
+          ? `it waits until ${blockers.map(number => `#${String(number)}`).join(', ')} close or merge, then goes back to intake`
+          : 'the queue stops working it until a re-triage';
+  emit({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {
