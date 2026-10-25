@@ -7,8 +7,9 @@ first and this file after it.
 
 - A pull request whose issue has a dated maintainer Current scope section that already
   authorizes merge on a Ready verdict and green CI, when the pull request stays inside
-  that scope. That ruling is the maintainer's approval for its size; it does not cover
-  the cases below, which still ask.
+  that scope. That ruling is the maintainer's approval for its size only. It does not
+  cover any other unclear case, in the pack's default or below: a change to
+  credentials or a persisted format still asks under such a ruling.
 
 ## Unclear: the queue asks
 
